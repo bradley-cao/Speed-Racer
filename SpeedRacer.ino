@@ -38,7 +38,6 @@ void setup() {
   xTaskCreatePinnedToCore(readPoints, "LidarPolling", 65536, NULL, 2, NULL, 0);
   digitalWrite(19, HIGH);  
   steer.write(straight);
-  drive.writeMicroseconds(minSpeed+1);
 }
 
 float average(float input[]) {
@@ -59,13 +58,15 @@ struct measurement {
   float angle;
   float dist;
 };
+float last_heading = 0;
+bool driving = false;
+float minDist = 800.0;
 void loop()
 {
 //// number of data points in cache: lidar._cached_scan_node_hq_count
 // float angle = (((float)_cached_scan_node_hq_buf[index].angle_z_q14) * 90.0 / 16384.0);
 // float distance = _cached_scan_node_hq_buf[index].dist_mm_q2 /4.0f;
 //// each cache load contains a full 360 scan. If you slow down the rotations too much it will not fit and data will be lost (too many points per 360 deg for cache size allowable on ESP32)
-  float minDist = 1000.0;
   double angle_change = 0;
   int measurements = 0;
   float maxDist = 0;
@@ -87,13 +88,17 @@ void loop()
         if (dot.dist < 130) {
           drive.writeMicroseconds(minSpeed-20);
           steer.write(straight);
-          Serial.print("STOP");
+          driving = false;
+          Serial.println("STOP");
           delay(1000*30);
         }
       }
   }
-  int coneSize = 9;
+  int coneDegrees = 45;
+  int coneSize = coneDegrees * (angles.size() / (range * 2));
   int externalCheckAngle = 30;
+  Serial.print("# Angles:");
+  Serial.println(angles.size());
   for (int i = coneSize; i < angles.size(); i++){
     int center = i - coneSize / 2;
     bool safe = true;
@@ -112,6 +117,10 @@ void loop()
     }
   }
   if (angles.size() > 50) {
+    if (!driving) {
+      drive.writeMicroseconds(minSpeed+1);
+      driving = true;
+    }
     for (int i = 0; i < sizeof(headings); i++) {
       headings[i] = headings[i + 1];
     }
@@ -121,13 +130,11 @@ void loop()
     headings[sizeof(headings) - 1] = maxDistAngle;
 //    float heading = average(headings);
     float heading = headings[sizeof(headings) - 3];
-    if (heading < straight) {
-      heading *= 1.1;
+    if (abs(last_heading - heading) > 5) {
+      last_heading = heading;
+      Serial.print("Heading:");
+      Serial.println(heading);
     }
-    if (heading > straight) {
-      heading *= 0.9;
-    }
-    Serial.println(heading);
     steer.write(straight + heading);
   }
 }
