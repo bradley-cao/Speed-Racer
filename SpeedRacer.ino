@@ -10,6 +10,8 @@ static int straight = 100;
 static int lidarpin = 19;
 static int minSpeed = 1570;
 
+using namespace std;
+
 Servo drive;
 Servo steer;
 
@@ -50,91 +52,73 @@ float average(float input[]) {
 
 float headings[] = {0, 0, 0, 0, 0};
 
-struct range {
-  float lower;
-  float upper;
-};
 struct measurement {
   float angle;
   float dist;
 };
 float last_heading = 0;
 bool driving = false;
-float minDist = 800.0;
 void loop()
 {
-//// number of data points in cache: lidar._cached_scan_node_hq_count
-// float angle = (((float)_cached_scan_node_hq_buf[index].angle_z_q14) * 90.0 / 16384.0);
-// float distance = _cached_scan_node_hq_buf[index].dist_mm_q2 /4.0f;
-//// each cache load contains a full 360 scan. If you slow down the rotations too much it will not fit and data will be lost (too many points per 360 deg for cache size allowable on ESP32)
-  double angle_change = 0;
-  int measurements = 0;
-  float maxDist = 0;
-  float maxDistAngle = 0;
   int range = 100;
-  std::vector<measurement> angles;
+  vector<float> angles;
+  vector<float> distances;
   for (int pos = 0; pos < lidar._cached_scan_node_hq_count; ++pos) {
-      scanDot dot;
-      if (!lidar._cached_scan_node_hq_buf[pos].dist_mm_q2) continue;
-      //dot.quality = _cached_scan_node_hq_buf[pos].quality; //quality is broken for some reason
-      dot.angle = (((float)lidar._cached_scan_node_hq_buf[pos].angle_z_q14) * 90.0 / 16384.0);
-      dot.dist = lidar._cached_scan_node_hq_buf[pos].dist_mm_q2 /4.0f;
-      if (dot.dist > 100000) {
-        continue;
-      }
-      dot.dist = min(dot.dist, 10000.0f);
-      if (dot.angle > 360 - range || dot.angle < range) {
-        angles.push_back({dot.angle, dot.dist});
-        if (dot.dist < 130) {
-          drive.writeMicroseconds(minSpeed-20);
-          steer.write(straight);
-          driving = false;
-          Serial.println("STOP");
-          delay(1000*30);
-        }
-      }
-  }
-  int coneDegrees = 45;
-  int coneSize = coneDegrees * (angles.size() / (range * 2));
-  int externalCheckAngle = 30;
-  Serial.print("# Angles:");
-  Serial.println(angles.size());
-  for (int i = coneSize; i < angles.size(); i++){
-    int center = i - coneSize / 2;
-    bool safe = true;
-    for (int j = i - coneSize; j <= i; j++) {
-      if (angles[j].dist < minDist) {
-        safe = false;
-      }
+    scanDot dot;
+    if (!lidar._cached_scan_node_hq_buf[pos].dist_mm_q2) continue;
+    dot.angle = (((float)lidar._cached_scan_node_hq_buf[pos].angle_z_q14) * 90.0 / 16384.0);
+    dot.dist = lidar._cached_scan_node_hq_buf[pos].dist_mm_q2 /4.0f;
+    if (dot.dist > 100000) {
+      continue;
     }
-//    if (angles[center - externalCheckAngle + 1].dist < minDist ||
-//        angles[center + externalCheckAngle - 1].dist < minDist) {
-//      safe = false;
-//    }
-    if (safe && angles[center].dist > maxDist) {
-      maxDist = angles[center].dist;
-      maxDistAngle = angles[center].angle;
+    if (dot.angle > 360 - range || dot.angle < range) {
+      angles.push_back(dot.angle);
+      distances.push_back(dot.dist);
+      if (dot.dist < 130) {
+        drive.writeMicroseconds(minSpeed-20);
+        steer.write(straight);
+        driving = false;
+        Serial.println("STOP");
+        delay(1000*30);
+      }
     }
   }
   if (angles.size() > 50) {
     if (!driving) {
-      drive.writeMicroseconds(minSpeed+1);
-      driving = true;
+        drive.writeMicroseconds(minSpeed+1);
+        driving = true;
     }
-    for (int i = 0; i < sizeof(headings); i++) {
-      headings[i] = headings[i + 1];
+    float heading = safestAngle(angles, distances);
+    if (heading > 180) {
+      heading -= 360;
     }
-    if (maxDistAngle >= 180) {
-      maxDistAngle -= 360;
-    }
-    headings[sizeof(headings) - 1] = maxDistAngle;
-//    float heading = average(headings);
-    float heading = headings[sizeof(headings) - 3];
-    if (abs(last_heading - heading) > 5) {
-      last_heading = heading;
-      Serial.print("Heading:");
-      Serial.println(heading);
-    }
+    Serial.println(heading);
     steer.write(straight + heading);
   }
+}
+
+
+float safeRadius = 200;
+float safestAngle(vector<float> angles, vector<float> distances) {
+  vector<vector<float>> sequences;
+  vector<float> sequence;
+  bool safe;
+  for (int i = 0; i < angles.size(); i++) {
+    safe = distances[i] > safeRadius;
+    if (safe) {
+      sequence.push_back(angles[i]);
+    } else {
+      if (sequence.size() > 0) {
+        sequences.push_back(sequence);
+        sequence.clear();
+      }
+    }
+  }
+  vector<float> longestSequence = sequences[0];
+  for (vector<float> s: sequences) {
+    if (s.size() > longestSequence.size()) {
+      longestSequence = s;
+    }
+  }
+  return longestSequence[(int)longestSequence.size()/2];
 }
