@@ -1,4 +1,3 @@
-#include "rpLidar.h"
 #include "rpLidarTypes.h"
 #include <esp_task_wdt.h>
 #include <Servo.h>
@@ -72,14 +71,19 @@ void loop()
       continue;
     }
     if (dot.angle > 360 - range || dot.angle < range) {
+      if (dot.angle > 180) dot.angle -= 360;
       angles.push_back(dot.angle);
       distances.push_back(dot.dist);
       if (dot.dist < 130) {
-        drive.writeMicroseconds(minSpeed-20);
+//        drive.writeMicroseconds(minSpeed-20);
+//        steer.write(straight);
+//        driving = false;
+//        Serial.println("STOP");
+//        delay(1000*30);
         steer.write(straight);
-        driving = false;
-        Serial.println("STOP");
-        delay(1000*30);
+        drive.writeMicroseconds(1000);
+        delay(1000*0.3);
+        drive.writeMicroseconds(minSpeed+1);
       }
     }
   }
@@ -88,37 +92,83 @@ void loop()
         drive.writeMicroseconds(minSpeed+1);
         driving = true;
     }
-    float heading = safestAngle(angles, distances);
-    if (heading > 180) {
-      heading -= 360;
-    }
+    int bestI = safestAngle(angles, distances);
+    float heading = angles[bestI];
+    float dist = distances[bestI];
+    Serial.print("Heading: ");
     Serial.println(heading);
     steer.write(straight + heading);
+    int spd = minSpeed + 10 + min(1.0f, (dist / 4000))* (1600-minSpeed) * abs(heading/90.0f);
+    Serial.print("Speed: ");
+    Serial.println(spd);
+    drive.writeMicroseconds(spd);
   }
 }
 
 
-float safeRadius = 200;
+float average(vector<float> vec) {
+  float sum = 0;
+  for (float f: vec) sum += f;
+  return sum / vec.size();
+}
+
 float safestAngle(vector<float> angles, vector<float> distances) {
-  vector<vector<float>> sequences;
-  vector<float> sequence;
-  bool safe;
+  float safeRadius = 10000;
+  for (float d: distances) {
+    safeRadius = min(d, safeRadius);
+  }
+  safeRadius += 100;
+  vector<vector<int>> sequences;
+  vector<int> sequence;
   for (int i = 0; i < angles.size(); i++) {
-    safe = distances[i] > safeRadius;
-    if (safe) {
-      sequence.push_back(angles[i]);
+    if (distances[i] > safeRadius) {
+      sequence.push_back(i);
     } else {
       if (sequence.size() > 0) {
-        sequences.push_back(sequence);
+        vector<int> s = sequence;
+        sequences.push_back(s);
+//        Serial.println(s[0]);
         sequence.clear();
       }
     }
   }
-  vector<float> longestSequence = sequences[0];
-  for (vector<float> s: sequences) {
+  sequences.push_back(sequence);
+//  Serial.println(sequences.size());
+  vector<int> longestSequence = sequences[0];
+  for (vector<int> s: sequences) {
     if (s.size() > longestSequence.size()) {
       longestSequence = s;
     }
   }
-  return longestSequence[(int)longestSequence.size()/2];
+  return chooseBestPoint(longestSequence, distances);
+}
+
+int edgeBlock = 15;
+int chooseBestPoint(vector<int> indices, vector<float> distances) {
+    int len = indices.size();
+    int mid = len / 2;
+    int maxI = indices[mid];
+    float maxDist = distances[maxI];
+    int left_i = mid - 1;
+    int right_i = mid + 1;
+    int leftI;
+    int rightI;
+    float dist;
+    while (left_i > edgeBlock) {
+        leftI = indices[left_i];
+        dist = distances[leftI];
+        if (dist > maxDist) {
+            maxI = leftI;
+            maxDist = dist;
+        }
+        rightI = indices[right_i];
+        dist = distances[rightI];
+        if (dist > maxDist) {
+            maxI = rightI;
+            maxDist = dist;
+        }
+        left_i--;
+        right_i++;
+    }
+    return maxI;
 }
